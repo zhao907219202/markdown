@@ -116,6 +116,87 @@ AE_READABLE事件与命令请求处理器进行关联，使得客户端可以向
 执行命令将产生相应的命令回复，为了将这些命令回复传送给客户端，服务器会将客户端套接字的AE_WRITABLE事件与命令回复处理器进行关联。当客户端尝试读取命令回复的时候，客户端套接字将产生
 AE_WRITABLE事件，触发命令回复处理器执行，当命令回复处理器将命令回复全部写入到套接字后，服务器就会解除客户端套接字的AE_WRITABLE事件与命令回复处理器之间的关联。
 
+![image](https://raw.githubusercontent.com/zhao907219202/markdown/master/md-picture/redis/redis-event-3-20180627.png)
+
+#### 时间事件
+Redis时间事件分两类:
++ 定时事件：让一段程序在指定的时间之后执行一次
++ 周期性事件：让一段程序每隔指定时间就执行一次
+
+一个时间事件主要有一下三个属性：1）服务器为时间事件创建的全局唯一的ID 2）when：毫秒精度的UNIX时间戳，记录事件到达事件 3）timeProc: 时间事件处理器，一个函数，事件到达时，服务器就会调用
+相应的处理器来处理事件。
+
+一个时间事件是定时事件还是周期性事件取决于时间事件处理器的返回值： 如果事件处理器返回一个ae.h/AE_NOMORE,那么这个事件就是一个定时事件,反之为周期性事件，服务器会根据事件处理器返回
+的值，对时间事件的when属性进行更新，让这个事件在一段时间后再次到达，并以这种方式一直更新并运行下去。
+
+##### 实现
+服务器将所有时间事件都放在一个无序链表（按ID排序，不按到达事件排序）中，每当时间事件执行器运行时，它就遍历整个链表，查找所有已到达的时间事件，并调用相关的事件处理器。
+
+##### API
++ ae.c/aeCreateTimeEvent 函数接受一个毫秒数milliseconds 和一个时间事件处理器proc作为参数，这个新的时间事件将在当前时间的milliseconds毫秒之后到达，而事件的处理器为proc。
++ ae.c/aeDeleteFileEvent 函数接受一个时间事件ID作为参数，然后从服务器中删除该ID所对应的时间事件
++ ae.c/aeSearchNearestTimer 函数返回到达时间距离当前时间最接近的那个时间事件
++ ae.c/processTimeEvents 函数是时间事件的执行器，这个函数会遍历所有已到达的时间事件，并调用这些事件的处理器。
+
+processTimeEvents 函数的定义可以用一下伪代码描述：
+
+```
+def processTimeEvents():
+    for time_event.when <= unix_ts_now():
+        # 事件已到达，执行事件处理器，并获取返回值
+        retval = time_event.timeProc()
+
+        if retval == AE_NOMORE:
+            delete_time_event_from_server(time_event)
+        else:
+            update_when(time_event, retval)
+```
+
+##### 时间事件应用实例：serverCron 函数
+持续运行的Redis服务器需要定期对自身的资源和状态进行检查和调整，从而确保服务器可以长期、稳定的运行，这些定期操作由redis.c/serverCron函数负责执行，它的主要工作包括：
++ 更新服务器的各类统计信息
++ 清理数据库中的过期键值对
++ 关闭和清理连接失效的客户端
++ 尝试进行AOF或RDB持久化操作
++ 如果服务器时主服务器，那么对从服务器进行定期同步
++ 如果处于集群模式，对集群进行定期同步和连接测试
+
+Redis服务器以周期性事件的方式运行serverCron函数，在服务器运行期间，每隔一段时间，serverCron就会执行一次，直到服务器关闭为止。redis.conf 的 hz选项可以配置每秒执行次数。
+
+#### 事件的调度与执行
+服务器同时存在文件事件和时间事件，所以服务器必须对这两种事件进行调度。事件的调度和执行由ae.c/aeProcessEvents 函数负责，伪代码如下：
+```
+def aeProcessEvents():
+    # 获取到达时间离当前时间最接近的时间事件
+    time_event = aeSearchNearestTimer()
+
+    # 计算最接近的时间事件距离到达还有多少毫秒
+    remaind_ms = time_event.when - unix_ts_now()
+
+    if remaind_ms < 0:
+        remaind_ms = 0;
+
+    # 根据remaind_ms的值，创建timeval结构
+    timeval = create_timeval_with_ms(remaind_ms)
+
+    # 阻塞并等待文件事件产生，最大阻塞时间由timeval结构决定，
+    # 如果remaind_ms的值为0，那么arApiPoll调用之后马上返回，不阻塞
+    aeApiPoll(timeval)
+
+    # redis源码实际并不存在，是只在写在这片区域的
+    processFileEvents()
+
+    processTimeEvents()
+
+```
+
+
+
+
+
+
+
+
 
 
 
