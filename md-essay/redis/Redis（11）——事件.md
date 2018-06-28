@@ -198,7 +198,11 @@ def main()：
         aeProcessEvents()
     clean_server()
 ```
-从时间处理的角度看，Redis服务器的运行流程可以用下面的流程图表示。事件调度和执行规则可以为：
+从时间处理的角度看，Redis服务器的运行流程可以用下面的流程图表示。
+
+![image](https://raw.githubusercontent.com/zhao907219202/markdown/master/md-picture/redis/redis-event-4-20180628.png)
+
+事件调度和执行规则可以为：
 
 1. aeApiPoll函数最大阻塞时间由到达时间最接近当前时间的时间事件决定，这样可以避免忙等待，也可以确保不会阻塞过长时间
 2. 因为文件事件是随机产生的，如果等待并处理完一次文件事件后，仍未有任何时间事件到达，那么服务器将再次等待并处理文件事件
