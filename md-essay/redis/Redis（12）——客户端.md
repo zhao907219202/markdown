@@ -138,3 +138,8 @@ argc属性：
 ```
 argv 属性是个数组，数组中的每一项都是字符串对象，其中 argv[0] 是要执行的命令，而之后的其他则是传给命令的参数。argc记录了argv数组的长度。
 
+![image](https://raw.githubusercontent.com/zhao907219202/markdown/master/md-picture/redis/redis-client-0-20180704.png)
+
+##### 命令的实现函数
+当服务器从协议内容中分析得出argv 和 argc属性后，服务器会根据项argv[0]的值，在命令表中查找命令对应的命令实现函数。
+
