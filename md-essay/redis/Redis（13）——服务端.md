@@ -86,4 +86,35 @@ client->cmd->proc(client);
 
 ![image](https://raw.githubusercontent.com/zhao907219202/markdown/master/md-picture/redis/redis-server-3-20180709.png)
 
+#### serverCron函数
+Redis服务器中的serverCron函数默认每隔100毫秒执行一次，这个函数负责管理服务器的资源，并保持服务器自身的良好运转。
+##### 更新服务器时间缓存
+Redis服务器中有不少功能需要获取系统的当前时间，而每次获取系统的当前时间都需要执行一次系统调用，为了减少系统调用的执行次数，服务器状态中的unixtime属性和mstime属性被
+用作当前时间的缓存：
+```
+struct redisServer{
+    time_t unixtime;   // 秒级时间戳
+    long long mstime;  // 毫秒级时间戳
+}
+```
+serverCron函数默认每100毫秒一次的频率更新unixtime属性和mstime属性，所以这两个属性记录的时间的精准度并不高。因此只会在打印日志、更新服务器的LRU时钟，决定是否执行持久化任务、
+计算服务器上线时间这些时间精准度要求不高的功能上使用上面两个缓存，对于为键设置过期时间、添加慢查询日志这种需要高精度时间的功能，服务器会再次执行系统调用。
+
+##### 更新LRU时钟
+服务器状态中的lrulock属性保存了服务器的lru时钟，这个属性和上面介绍的unixtime属性、mstime属性一样，都是服务器时间缓存的一种：
+```
+struct redisServer {
+    // 默认每10秒更新一次的时钟缓存
+    // 用于计算键的空转时长
+    unsigned lruclock;
+}
+```
+每个Redis对象都会有一个lru属性，这个lru属性保存了对象最后一次被访问的时间：
+typedef struct redisObject{
+    unisigned lru;
+}robj;
+当数据库要计算一个数据库键的空转时间（也就是数据库键对应的值对象的空转时间），程序会用服务器的lruclock属性记录的时间减去对象的lru属性记录的时间，得出计算结果就是这个
+对象的空转时间。
+serverCron函数默认会以每100毫秒一次的频率更新lruclock属性的值，因为这个时钟不是实时的，所以根据计算出来的LRU时间实际上只是一个模糊的估算值。
+
 
