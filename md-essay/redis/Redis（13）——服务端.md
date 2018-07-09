@@ -31,3 +31,9 @@ struct redisCommand {
     long long microseconds, calls;
 };
 ```
+
+![image](https://raw.githubusercontent.com/zhao907219202/markdown/master/md-picture/redis/redis-server-0-20180709.png)
+
+sflags 属性可以使用的标识值，以及这些标识的意义。
+
+![image](https://raw.githubusercontent.com/zhao907219202/markdown/master/md-picture/redis/redis-server-1-20180709.png)
