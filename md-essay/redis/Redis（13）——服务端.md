@@ -37,3 +37,6 @@ struct redisCommand {
 sflags 属性可以使用的标识值，以及这些标识的意义。
 
 ![image](https://raw.githubusercontent.com/zhao907219202/markdown/master/md-picture/redis/redis-server-1-20180709.png)
+
+举个例子，SET命令的name是“set”，实现函数为setCommand；命令的参数个数为-3，表示命令接受三个或以上数量的参数；命令的标识为“wm”，表示SET命令是一个写入命令，并且在执行这个
+命令之前，服务器应该对占用内存状况进行检查，因为这个命令可能会占用大量内存。
