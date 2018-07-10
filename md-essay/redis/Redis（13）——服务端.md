@@ -117,4 +117,62 @@ typedef struct redisObject{
 对象的空转时间。
 serverCron函数默认会以每100毫秒一次的频率更新lruclock属性的值，因为这个时钟不是实时的，所以根据计算出来的LRU时间实际上只是一个模糊的估算值。
 
+##### 更新服务器每秒执行命令次数
+serverCron函数中的trackOperationsPerSecond函数会以每100毫秒一次的频率执行，这个函数的功能是以抽样计算的方式，估算并记录服务器在最近一秒钟处理的命令请求数量，这个值可以
+通过INFO status命令的 instantaneous_ops_per_sec 域查看。trackOperationsPerSecond 函数和服务器状态的四个属性有关。
+```
+ /* The following two are used to track instantaneous metrics, like
+     * number of operations per second, network traffic. */
+    struct {
+        long long last_sample_time; /* Timestamp of last sample in ms */
+        long long last_sample_count;/* Count in last sample */
+        // 数组中每个项都记录了一次抽样结果（环形数组）
+        long long samples[STATS_METRIC_SAMPLES];
+        // 每次抽样后自增1，等于16重置为0
+        int idx;
+    } inst_metric[STATS_METRIC_COUNT];
+```
+trackOperationsPerSecond 函数每次运行，都会根据 last_sample_time 记录的上一次抽样时间和服务器当前时间，以及 last_sample_count 记录的上一次抽样已执行命令数量和服务器当前
+已执行命令数量，计算出两次 trackOperationsPerSecond 调用之间，服务器平均每一毫秒处理了多少个命令请求，然后乘1000，这就得到了服务器在一秒钟内能处理多少个命令请求的估计值，
+这个估计值会被作为一个新的数组项放进samples环形数组里面。当客户端执行INFO命令，服务器会调用getOperationPerSecond函数，这个函数会将环形数组的所有值加和再求平均值，然后返回
+出去，并且就是instantaneous_ops_per_sec的值。
+
+##### 更新服务器内存峰值记录
+serverCron函数执行，程序会查看服务器当前使用的内存数量，并与redisServer中的stat_peak_memory属性值比较，如果比该值大，则存入。INFO memory命令的 used_memory_peak 和 used_memory_peak_human
+两个域记录了服务器的内存峰值。
+
+##### 处理SIGTERM信号
+服务器启动会为服务器进程的SIGTERM信号关联处理器sigtermHandler函数，这个信号处理器负责在服务器接到SIGTERM信号时，打开服务器状态的shutdown_asap标识，每次serverCron函数运行时，
+程序都会对服务器状态的shutdown_asap属性进行检查，并根据属性的值决定是否关闭服务器（服务器在关闭之前会进行RDB持久化操作）。
+
+##### 管理客户端资源
+serverCron函数每次执行都会调用clientsCron函数，clientsCron函数会对一定数量的客户端进行一下两个检查：
+
++ 如果客户端与服务器之间的连接已经超时，那么释放这个客户端
++ 如果客户端在上一次执行命令请求之后，输入缓冲区的大小超过了一定的长度，那么程序会释放客户端当前的输入缓冲区，并重新创建一个默认大小的输入缓冲区，从而防止客户端的输入缓冲
+耗费过多的内存
+
+##### 管理数据库资源
+serverCron函数每次执行都会调用databasesCron函数，这个函数会对服务器中的一部分数据库进行检查，删除其中的过期键，并在有需要时，对字典进行收缩操作。
+
+##### 执行被延迟的BGREWRITEAOF
+在服务器执行BGSAVE命令期间，如果客户端向服务器发来 BGREWRITEAOF 命令，那么服务器会将 BGREWRITEAOF 延迟到 BGSAVE 命令执行完毕之后。redisServer中的 aof_rewrite_scheduled 属性记录是否有
+BGREWRITEAOF 被延迟，每次serverCron执行，检查到BGSAVE、BGREWRITEAOF 都没有在执行，并且aof_rewrite_scheduled为1，那么服务器就会执行 BGREWRITEAOF。
+
+##### 检查持久化操作的运行状态
+服务器状态使用 rdb_child_pid 属性和 aof_child_pid 属性记录执行 BGSAVE 命令和 BGREWRITEAOF 命令的子进程ID，这两个属性也可以用于检查BGSAVE命令或者BGREWRITEAOF命令是否正在执行。
+每次serverCron函数执行时，程序都会检查 rdb_child_pid 和 aof_child_pid 两个属性的值，只要其中一个不为-1，程序就会执行一次wait3函数，检查子进程是否有信号发来服务器进程：
+
++ 如果有信号到达，那么表示新的RDB文件已经生成完毕（对于BGSAVE命令来说），或者AOF文件已经重写完毕（对于 BGREWRITEAOF 命令来说），服务器需要进行相应命令的后续操作，比如用新的RDB文件
+替换现有的RDB文件，或者用重写后的AOF文件替换现有的AOF文件。
++ 如果没有信号到达，那么表示持久化操作未完成，程序不做操作。
+
+另一方面，如果两个属性的值都是-1，那么表示服务器没有在进行持久化操作，这时，程序执行以下三个检查:
+
++ 查看是否有 BGREWRITEAOF 被延迟了，如果有，开始执行 BGREWRITEAOF
++ 检查服务器的自动保存条件是否已经满足，如果条件已经满足，并且服务器没有在执行其他持久化操作，那么服务器开始一次新的BGSAVE操作（因为条件1可能执行 BGREWRITEAOF，所以这里再次确认服务器
+没有在执行持久化操作）
++ 检查服务器的AOF重写条件是否满足，如果满足，并且服务器没有在执行持久化操作，那么服务器将开始一次新的 BGREWRITEAOF 操作。
+
+
 
